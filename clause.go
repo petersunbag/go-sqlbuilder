@@ -1,144 +1,44 @@
 package sqlbuilder
 
-import (
-	"fmt"
-	"strings"
-)
-
-// Clause represents a SQL where Clause
-type Clause interface {
-	// interpret interprets Clause into string
-	interpret(sb *SelectBuilder) string
-	// Not negatives Clause
-	Not() *notClause
-	// And connects several Clause into an andClause
-	And(clause ...Clause) *andClause
-	// Or connects several Clause into an orClause
-	Or(clause ...Clause) *orClause
+// Clause represents a specific basic SQL where Clause
+type Clause struct {
+	Builder
 }
 
-// newAndClause creates an *andClause
-func newAndClause(augend Clause, addend ...Clause) *andClause {
-	return &andClause{
-		Augend: augend,
-		Addend: addend,
+func (c *Clause) Not() *Clause {
+	c.Builder = Build("NOT $?", c.Builder)
+	return c
+}
+
+func (c *Clause) And(others ...*Clause) *Clause {
+	builder := c.Builder
+	for _, o := range others {
+		builder = Build("$? AND $?", builder, o.Builder)
 	}
+
+	c.Builder = Build("($?)", builder)
+	return c
 }
 
-// andClause represents a SQL AND Clause
-type andClause struct {
-	Augend Clause
-	Addend []Clause
-}
-
-func (a *andClause) interpret(sb *SelectBuilder) string {
-	andExpr := make([]string, 0, len(a.Addend)+1)
-	andExpr = append(andExpr, a.Augend.interpret(sb))
-	for _, c := range a.Addend {
-		andExpr = append(andExpr, c.interpret(sb))
+func (c *Clause) Or(others ...*Clause) *Clause {
+	builder := c.Builder
+	for _, o := range others {
+		builder = Build("$? OR $?", builder, o.Builder)
 	}
-	return fmt.Sprintf("(%v)", strings.Join(andExpr, " AND "))
+
+	c.Builder = Build("($?)", builder)
+	return c
 }
 
-func (a *andClause) Not() *notClause {
-	return newNotClause(a)
+// Interpret interprets Clause into string
+func Interpret(clause *Clause, sb *SelectBuilder) string {
+	sql, _ := clause.Build()
+	sb.Where(sb.Var(clause.Builder))
+	return sql
 }
 
-func (a *andClause) And(clause ...Clause) *andClause {
-	return newAndClause(a, clause...)
-}
-
-func (a *andClause) Or(clause ...Clause) *orClause {
-	return newOrClause(a, clause...)
-}
-
-// newOrClause creates an *orClause
-func newOrClause(augend Clause, addend ...Clause) *orClause {
-	return &orClause{
-		Augend: augend,
-		Addend: addend,
-	}
-}
-
-// orClause represents a SQL OR Clause
-type orClause struct {
-	Augend Clause
-	Addend []Clause
-}
-
-func (o *orClause) interpret(sb *SelectBuilder) string {
-	orExpr := make([]string, 0, len(o.Addend)+1)
-	orExpr = append(orExpr, o.Augend.interpret(sb))
-	for _, c := range o.Addend {
-		orExpr = append(orExpr, c.interpret(sb))
-	}
-	return fmt.Sprintf("(%v)", strings.Join(orExpr, " OR "))
-}
-
-func (o *orClause) Not() *notClause {
-	return newNotClause(o)
-}
-
-func (o *orClause) And(clause ...Clause) *andClause {
-	return newAndClause(o, clause...)
-}
-
-func (o *orClause) Or(clause ...Clause) *orClause {
-	return newOrClause(o, clause...)
-}
-
-// newNotClause creates a notClause
-func newNotClause(clause Clause) *notClause {
-	return &notClause{
-		clause,
-	}
-}
-
-// notClause represents a SQL NOT Clause
-type notClause struct {
-	negend Clause
-}
-
-func (n *notClause) interpret(sb *SelectBuilder) string {
-	return fmt.Sprintf("(NOT %v)", n.negend.interpret(sb))
-}
-
-func (n *notClause) Not() *notClause {
-	return newNotClause(n)
-}
-
-func (n *notClause) And(clause ...Clause) *andClause {
-	return newAndClause(n, clause...)
-}
-
-func (n *notClause) Or(clause ...Clause) *orClause {
-	return newOrClause(n, clause...)
-}
-
-// basicClause represents a specific basic SQL where Clause
-type basicClause struct {
-	*operation
-	operand []interface{}
-}
-
-func (b *basicClause) interpret(sb *SelectBuilder) string {
-	return b.operate(sb, b.field, b.operand)
-}
-
-func (b *basicClause) Not() *notClause {
-	return newNotClause(b)
-}
-
-func (b *basicClause) And(clause ...Clause) *andClause {
-	return newAndClause(b, clause...)
-}
-
-func (b *basicClause) Or(clause ...Clause) *orClause {
-	return newOrClause(b, clause...)
-}
-
-// operate interprets basicClause into string
-type operate func(sb *SelectBuilder, field string, operand []interface{}) string
+// operate interprets Clause into string
+type operate func(field string, value ...interface{}) string
 
 // newOperation creates an *operation
 func newOperation(field string, operate operate) *operation {
@@ -154,12 +54,10 @@ type operation struct {
 	operate operate
 }
 
-// NewClause creates *basicClause with operand value
-func (o *operation) NewClause(value ...interface{}) *basicClause {
-	return &basicClause{
-		o,
-		value,
-	}
+// NewClause creates *Clause with operand value
+func (o *operation) NewClause(value ...interface{}) *Clause {
+	builder := Build(o.operate(o.field, value...), value...)
+	return &Clause{builder}
 }
 
 // newZeroOperation creates a *zeroOperandOperation
@@ -169,13 +67,13 @@ func newZeroOperation(field string, operate operate) *zeroOperandOperation {
 	}
 }
 
-// zeroOperandOperation can create *basicClause with zero operand
+// zeroOperandOperation can create *Clause with zero operand
 type zeroOperandOperation struct {
 	*operation
 }
 
-// NewClause creates *basicClause with zero operand
-func (z *zeroOperandOperation) NewClause() *basicClause {
+// NewClause creates *Clause with zero operand
+func (z *zeroOperandOperation) NewClause() *Clause {
 	return z.operation.NewClause()
 }
 
@@ -186,13 +84,13 @@ func newOneOperandOperation(field string, operate operate) *oneOperandOperation 
 	}
 }
 
-// oneOperandOperation can create *basicClause with one operand
+// oneOperandOperation can create *Clause with one operand
 type oneOperandOperation struct {
 	*operation
 }
 
-// NewClause creates *basicClause with one operand v
-func (o *oneOperandOperation) NewClause(v interface{}) *basicClause {
+// NewClause creates *Clause with one operand v
+func (o *oneOperandOperation) NewClause(v interface{}) *Clause {
 	return o.operation.NewClause(v)
 }
 
@@ -203,71 +101,71 @@ func newTwoOperandOperation(field string, operate operate) *twoOperandOperation 
 	}
 }
 
-// twoOperandOperation can create *basicClause with two operand
+// twoOperandOperation can create *Clause with two operand
 type twoOperandOperation struct {
 	*operation
 }
 
-// NewClause creates *basicClause with operand v1, v2
-func (t *twoOperandOperation) NewClause(v1, v2 interface{}) *basicClause {
+// NewClause creates *Clause with operand v1, v2
+func (t *twoOperandOperation) NewClause(v1, v2 interface{}) *Clause {
 	return t.operation.NewClause(v1, v2)
 }
 
 var (
-	isNull operate = func(sb *SelectBuilder, field string, operand []interface{}) string {
-		return sb.IsNull(field)
+	isNull operate = func(field string, value ...interface{}) string {
+		return (&Cond{&Args{}}).IsNull(field)
 	}
 
-	notNull operate = func(sb *SelectBuilder, field string, operand []interface{}) string {
-		return sb.IsNotNull(field)
+	notNull operate = func(field string, value ...interface{}) string {
+		return (&Cond{&Args{}}).IsNotNull(field)
 	}
 
-	e operate = func(sb *SelectBuilder, field string, operand []interface{}) string {
-		return sb.E(field, operand[0])
+	e operate = func(field string, value ...interface{}) string {
+		return (&Cond{&Args{}}).E(field, value[0])
 	}
 
-	ne operate = func(sb *SelectBuilder, field string, operand []interface{}) string {
-		return sb.NE(field, operand[0])
+	ne operate = func(field string, value ...interface{}) string {
+		return (&Cond{&Args{}}).NE(field, value[0])
 	}
 
-	g operate = func(sb *SelectBuilder, field string, operand []interface{}) string {
-		return sb.G(field, operand[0])
+	g operate = func(field string, value ...interface{}) string {
+		return (&Cond{&Args{}}).G(field, value[0])
 	}
 
-	ge operate = func(sb *SelectBuilder, field string, operand []interface{}) string {
-		return sb.GE(field, operand[0])
+	ge operate = func(field string, value ...interface{}) string {
+		return (&Cond{&Args{}}).GE(field, value[0])
 	}
 
-	l operate = func(sb *SelectBuilder, field string, operand []interface{}) string {
-		return sb.L(field, operand[0])
+	l operate = func(field string, value ...interface{}) string {
+		return (&Cond{&Args{}}).L(field, value[0])
 	}
 
-	le operate = func(sb *SelectBuilder, field string, operand []interface{}) string {
-		return sb.LE(field, operand[0])
+	le operate = func(field string, value ...interface{}) string {
+		return (&Cond{&Args{}}).LE(field, value[0])
 	}
 
-	like operate = func(sb *SelectBuilder, field string, operand []interface{}) string {
-		return sb.Like(field, operand[0])
+	like operate = func(field string, value ...interface{}) string {
+		return (&Cond{&Args{}}).Like(field, value[0])
 	}
 
-	notLike operate = func(sb *SelectBuilder, field string, operand []interface{}) string {
-		return sb.NotLike(field, operand[0])
+	notLike operate = func(field string, value ...interface{}) string {
+		return (&Cond{&Args{}}).NotLike(field, value[0])
 	}
 
-	between operate = func(sb *SelectBuilder, field string, operand []interface{}) string {
-		return sb.Between(field, operand[0], operand[1])
+	between operate = func(field string, value ...interface{}) string {
+		return (&Cond{&Args{}}).Between(field, value[0], value[1])
 	}
 
-	notBetween operate = func(sb *SelectBuilder, field string, operand []interface{}) string {
-		return sb.NotBetween(field, operand[0], operand[1])
+	notBetween operate = func(field string, value ...interface{}) string {
+		return (&Cond{&Args{}}).NotBetween(field, value[0], value[1])
 	}
 
-	in operate = func(sb *SelectBuilder, field string, operand []interface{}) string {
-		return sb.In(field, operand...)
+	in operate = func(field string, value ...interface{}) string {
+		return (&Cond{&Args{}}).In(field, value...)
 	}
 
-	notIn operate = func(sb *SelectBuilder, field string, operand []interface{}) string {
-		return sb.NotIn(field, operand...)
+	notIn operate = func(field string, value ...interface{}) string {
+		return (&Cond{&Args{}}).NotIn(field, value...)
 	}
 )
 
@@ -339,9 +237,4 @@ func NewInOperation(field string) *operation {
 // NewNotInOperation creates operation which can create Clause that represents "field NOT IN (value...)"
 func NewNotInOperation(field string) *operation {
 	return newOperation(field, notIn)
-}
-
-// Interpret interprets Clause into string
-func Interpret(clause Clause, sb *SelectBuilder) string {
-	return clause.interpret(sb)
 }
