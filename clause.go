@@ -1,6 +1,6 @@
 package sqlbuilder
 
-// Clause represents a specific basic SQL where Clause
+// Clause represents a SQL where clause
 type Clause struct {
 	Builder
 }
@@ -30,14 +30,14 @@ func (c *Clause) Or(others ...*Clause) *Clause {
 	return c
 }
 
-// Interpret interprets Clause into string
+// Interpret interprets Clause into string and save in SelectBuilder
 func Interpret(clause *Clause, sb *SelectBuilder) string {
 	sql, _ := clause.Build()
 	sb.Where(sb.Var(clause.Builder))
 	return sql
 }
 
-// operate interprets Clause into string
+// operate represents a specific SQL where operation and creates a SQL where clause with placeholder
 type operate func(field string, value ...interface{}) string
 
 // newOperation creates an *operation
